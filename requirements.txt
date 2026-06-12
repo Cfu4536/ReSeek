@@ -1,0 +1,16 @@
+# LLM库
+# torch==2.6.0
+# torchvision==0.21.0
+# torchaudio==2.6.0
+# pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+
+# torch @ file:///opt/data/torch-whl/torch-2.6.0+cu124-cp310-cp310-linux_x86_64.whl
+# torchvision @ file:///opt/data/torch-whl/torchvision-0.21.0+cu124-cp310-cp310-linux_x86_64.whl
+# torchaudio @ file:///opt/data/torch-whl/torchaudio-2.6.0+cu124-cp310-cp310-linux_x86_64.whl
+
+sglang[all]==0.4.6.post1
+torch-memory-saver
+# vllm==0.8.5.post1
+# tensordict==0.6.2
+# torchdata
+
