@@ -9,7 +9,7 @@
 # torchaudio @ file:///opt/data/torch-whl/torchaudio-2.6.0+cu124-cp310-cp310-linux_x86_64.whl
 
 sglang[all]==0.4.6.post1
-torch-memory-saver
+# torch-memory-saver
 # vllm==0.8.5.post1
 # tensordict==0.6.2
 # torchdata
