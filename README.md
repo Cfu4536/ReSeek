@@ -85,13 +85,13 @@ Before running training scripts, set the following environment variables:
 
 ```bash
 # Set project root directory
-export PROJECT_ROOT=/path/to/ReSeek
+export PROJECT_ROOT=/opt/exps/ReSeek
 
 # Set model directory
-export MODEL_DIR=/path/to/models
+export MODEL_DIR=/opt/data/TencentBAC
 
 # Set data directory
-export DATA_DIR=/path/to/datasets
+export DATA_DIR=/opt/datasets/TencentBAC
 ```
 
 ### (2) Data Preparation

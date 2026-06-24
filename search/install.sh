@@ -1,4 +1,3 @@
-
 pip install transformers datasets pyserini
 
 ## install the gpu version faiss to guarantee efficient RL rollout

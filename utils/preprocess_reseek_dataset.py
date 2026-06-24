@@ -57,7 +57,8 @@ def process_single_row(row, current_split_name, row_index):
     Returns:
         pd.Series: Processed row data in the required format
     """
-    question = row.get("question", "")
+    # question = row.get("question", "")
+    question = row.get("extra_info", {}).get("question", "")
 
     # Build prompt structure
     user_content = user_content_prefix.rstrip("\n") + question
@@ -115,17 +116,33 @@ def main():
 
             try:
                 # Download Parquet file from HuggingFace
-                logger.info(f"Downloading {parquet_filename} from {args.hf_repo_id}")
-                local_parquet_filepath = hf_hub_download(
-                    repo_id=args.hf_repo_id,
-                    filename=parquet_filename,
-                    repo_type="dataset",
-                    local_dir=tmp_download_dir,
-                    local_dir_use_symlinks=False,
-                )
+                # logger.info(f"Downloading {parquet_filename} from {args.hf_repo_id}")
+                # local_parquet_filepath = hf_hub_download(
+                #     repo_id=args.hf_repo_id,
+                #     filename=parquet_filename,
+                #     repo_type="dataset",
+                #     local_dir=tmp_download_dir,
+                #     local_dir_use_symlinks=False,
+                # )
+                base_dir = "/opt/datasets/TencentBAC/ReSeek_train_test"
+                local_parquet_filepath = os.path.join(base_dir, parquet_filename)
 
                 # Load and process Parquet file
-                df_raw = pd.read_parquet(local_parquet_filepath)
+                data_source_tagged_list = [
+                    "nq",
+                    "triviaqa",
+                    "popqa",
+                    "hotpotqa",
+                    "2wikimultihopqa",
+                    "musique",
+                    "bamboogle",
+                    "fictional",
+                ]
+                data_source_tagged_col = "data_source"
+                df_raw = pd.read_parquet(
+                    local_parquet_filepath,
+                    filters=[(data_source_tagged_col, 'in', data_source_tagged_list)]
+                )
                 logger.info(f"Loaded {len(df_raw)} rows from {parquet_filename}")
 
                 def apply_process_row(row, split_name=split):

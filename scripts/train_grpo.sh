@@ -2,7 +2,8 @@
 WAND_PROJECT='ReSeek'
 
 
-export BASE_MODEL='your/path/to/Qwen2.5-3B-Instruct'
+#export BASE_MODEL='/opt/data/qwen/Qwen2.5-3B-Instruct'
+export BASE_MODEL='/opt/data/TencentBAC/ReSeek-qwen2.5-3b-em-grpo'
 
 export EXPERIMENT_NAME=ReSeek-nq_hotpotqa_train-qwen2.5-3b-it-em-grpo_max_turn1
 set -x
@@ -12,8 +13,8 @@ source /usr/local/Ascend/nnal/atb/set_env.sh
 export TORCHDYNAMO_DISABLE=1
 export TORCH_COMPILE_DISABLE=1
 
-TRAIN_DATA_DIR=your/path/to/nq_search
-TEST_DATA_DIR=your/path/to/nq_search
+TRAIN_DATA_DIR=/opt/exps/ReSeek/data/ReSeek_processed_direct_v1
+TEST_DATA_DIR=/opt/exps/ReSeek/data/ReSeek_processed_direct_v1
 TIME_STAMP=$(date +%Y%m%d_%H%M%S)
 
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
@@ -62,7 +63,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.default_hdfs_dir=null \
     reward_model.reward_manager=naive \
     max_turns=1 \
-    retriever.url="your/path/to/retrieve" \
+    retriever.url=" http://0.0.0.0:8100/retrieve" \
     retriever.topk=3 \
     2>&1 | tee logs/$EXPERIMENT_NAME_$TIME_STAMP.log
 #    trainer.device=npu
