@@ -11,7 +11,7 @@ set -euo pipefail
 MODEL_PATH="${MODEL_PATH:-/opt/data/TencentBAC/e5-base-v2}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-3}"
 if [ -z "${DATA_PARALLEL_SIZE:-}" ]; then
   DATA_PARALLEL_SIZE="$(awk -F',' '{print NF}' <<< "${VISIBLE_DEVICES}")"
 fi
