@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # vLLM HTTP API 版本的索引构建脚本
 # 使用方法：
@@ -9,7 +10,7 @@
 CORPUS_PATH="/opt/datasets/TencentBAC/ReSeek-corpus/hot-wiki-18.jsonl"         # 替换为你的语料库路径
 SAVE_DIR="/opt/datasets/TencentBAC/ReSeek-corpus/"
 RETRIEVAL_METHOD=e5                 # 或者 bge, contriever 等
-BATCH_SIZE=64                          # API 调用的批次大小
+BATCH_SIZE=128                          # API 调用的批次大小
 VLLM_API_URL="http://localhost:8000"   # vLLM 服务器地址
 # EMBEDDING_PATH="/group/40077/shyuli/datasets/RL/hot_benchmark/wiki/hot-wiki-18-e5/emb_e5.memmap" # 预计算的 embedding 文件路径
 # corpus_file=/group/40077/shyuli/datasets/RL/hot_benchmark/wiki/hot-wiki-18.jsonl # jsonl

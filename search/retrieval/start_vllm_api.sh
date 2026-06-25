@@ -5,6 +5,6 @@ CUDA_VISIBLE_DEVICES=3 vllm serve /opt/data/TencentBAC/e5-base-v2 \
   --host 0.0.0.0 \
   --port 8000 \
   --data-parallel-size 1 \
-  --gpu-memory-utilization 0.5
+  --gpu-memory-utilization 0.6
 
 

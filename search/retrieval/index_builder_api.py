@@ -14,8 +14,9 @@ import time
 
 
 class VLLMEmbeddingClient:
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = "http://localhost:8000", max_length: int = 256):
         self.embeddings_url = f"{base_url.rstrip('/')}/v1/embeddings"
+        self.max_length = max_length
         self.task_description = "Given a web search query, retrieve relevant passages that answer the query"
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -27,7 +28,7 @@ class VLLMEmbeddingClient:
             try:
                 response = requests.post(
                     self.embeddings_url,
-                    json={"input": texts, "encoding_format": "float", "truncate_prompt_tokens": 256},
+                    json={"input": texts, "encoding_format": "float", "truncate_prompt_tokens": self.max_length},
                     headers={"Content-Type": "application/json"},
                     timeout=300,  # 5 minute timeout
                 )
@@ -55,9 +56,9 @@ class VLLMEmbeddingClient:
             return False
 
 
-def load_vllm_client(vllm_api_url: str = "http://localhost:8000"):
+def load_vllm_client(vllm_api_url: str = "http://localhost:8000", max_length: int = 256):
     """Load vLLM HTTP API client"""
-    client = VLLMEmbeddingClient(base_url=vllm_api_url)
+    client = VLLMEmbeddingClient(base_url=vllm_api_url, max_length=max_length)
 
     if not client.check_server_status():
         print(f"Warning: Unable to connect to vLLM server {vllm_api_url}")
@@ -109,6 +110,7 @@ class Index_Builder:
         self.vllm_api_url = vllm_api_url
         self.max_length = max_length
         self.chunk_save_interval = chunk_save_interval
+        self.encoder = load_vllm_client(self.vllm_api_url, max_length=self.max_length)
         # prepare save dir
         print(self.save_dir)
         if not os.path.exists(self.save_dir):
@@ -323,15 +325,11 @@ class Index_Builder:
             # Calculate embeddings using API
             all_embeddings = self.encode_all()
             if self.save_embedding:
-                self._save_embedding(all_embeddings)
-            del self.corpus
+                print(f"Embeddings saved to {self.embedding_save_path}")
         del self.corpus
         all_embeddings = np.array(all_embeddings, dtype=np.float16)
         print(all_embeddings.shape)
         # build index
-        import pdb
-
-        pdb.set_trace()
         print("Creating index")
         dim = all_embeddings.shape[-1]
         faiss_index = faiss.index_factory(dim, self.faiss_type, faiss.METRIC_INNER_PRODUCT)
