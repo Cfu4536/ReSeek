@@ -1,37 +1,45 @@
 #!/bin/bash
 set -euo pipefail
 
-# vLLM HTTP API 版本的索引构建脚本
-# 使用方法：
-# 1. 先启动 vLLM 服务器
-# 2. 再运行此脚本构建索引
+# Build a FAISS index through the vLLM embedding HTTP API.
+# Start search/retrieval/start_vllm_api.sh first.
+#
+# Throughput knobs:
+#   BATCH_SIZE: documents per API request
+#   API_PARALLELISM: concurrent API requests kept in flight
+#   MAX_LENGTH: truncate length sent to vLLM
 
-# 配置参数
-CORPUS_PATH="/opt/datasets/TencentBAC/ReSeek-corpus/hot-wiki-18.jsonl"         # 替换为你的语料库路径
-SAVE_DIR="/opt/datasets/TencentBAC/ReSeek-corpus/"
-RETRIEVAL_METHOD=e5                 # 或者 bge, contriever 等
-BATCH_SIZE=128                          # API 调用的批次大小
-VLLM_API_URL="http://localhost:8000"   # vLLM 服务器地址
-# EMBEDDING_PATH="/group/40077/shyuli/datasets/RL/hot_benchmark/wiki/hot-wiki-18-e5/emb_e5.memmap" # 预计算的 embedding 文件路径
-# corpus_file=/group/40077/shyuli/datasets/RL/hot_benchmark/wiki/hot-wiki-18.jsonl # jsonl
-# change faiss_type to HNSW32/64/128 for ANN indexing
-# change retriever_name to bm25 for BM25 indexing
-
-#"vllm serve /group/40077/shyuli/models/embedding/e5-base-v2 --task embed --host 0.0.0.0 --port 8000 --data-parallel-size 2"
+CORPUS_PATH="${CORPUS_PATH:-/opt/datasets/TencentBAC/ReSeek-corpus/hot-wiki-18.jsonl}"
+SAVE_DIR="${SAVE_DIR:-/opt/datasets/TencentBAC/ReSeek-corpus/}"
+RETRIEVAL_METHOD="${RETRIEVAL_METHOD:-e5}"
+BATCH_SIZE="${BATCH_SIZE:-256}"
+API_PARALLELISM="${API_PARALLELISM:-4}"
+VLLM_API_URL="${VLLM_API_URL:-http://localhost:8000}"
+MAX_LENGTH="${MAX_LENGTH:-256}"
+REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300}"
+CHUNK_SAVE_INTERVAL="${CHUNK_SAVE_INTERVAL:-1000}"
+FAISS_TYPE="${FAISS_TYPE:-Flat}"
 
 echo
-echo "开始构建索引..."
+echo "Starting vLLM API index build..."
+echo "  corpus: ${CORPUS_PATH}"
+echo "  save dir: ${SAVE_DIR}"
+echo "  batch size: ${BATCH_SIZE}"
+echo "  API parallelism: ${API_PARALLELISM}"
+echo "  max length: ${MAX_LENGTH}"
+echo
 
-# 运行索引构建
 python search/retrieval/index_builder_api.py \
-    --retrieval_method $RETRIEVAL_METHOD \
-    --corpus_path $CORPUS_PATH \
-    --save_dir $SAVE_DIR \
-    --batch_size $BATCH_SIZE \
-    --vllm_api_url $VLLM_API_URL \
-    --max_length 256 \
-    --save_embedding \
-    --faiss_type "Flat"
+  --retrieval_method "${RETRIEVAL_METHOD}" \
+  --corpus_path "${CORPUS_PATH}" \
+  --save_dir "${SAVE_DIR}" \
+  --batch_size "${BATCH_SIZE}" \
+  --vllm_api_url "${VLLM_API_URL}" \
+  --max_length "${MAX_LENGTH}" \
+  --api_parallelism "${API_PARALLELISM}" \
+  --request_timeout "${REQUEST_TIMEOUT}" \
+  --chunk_save_interval "${CHUNK_SAVE_INTERVAL}" \
+  --save_embedding \
+  --faiss_type "${FAISS_TYPE}"
 
-# --embedding_path $EMBEDDING_PATH \
-echo "索引构建完成！"
+echo "Index build finished."

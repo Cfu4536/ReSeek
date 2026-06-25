@@ -11,12 +11,14 @@ from tqdm import tqdm
 import datasets
 import requests
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class VLLMEmbeddingClient:
-    def __init__(self, base_url: str = "http://localhost:8000", max_length: int = 256):
+    def __init__(self, base_url: str = "http://localhost:8000", max_length: int = 256, request_timeout: int = 300):
         self.embeddings_url = f"{base_url.rstrip('/')}/v1/embeddings"
         self.max_length = max_length
+        self.request_timeout = request_timeout
         self.task_description = "Given a web search query, retrieve relevant passages that answer the query"
 
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -30,7 +32,7 @@ class VLLMEmbeddingClient:
                     self.embeddings_url,
                     json={"input": texts, "encoding_format": "float", "truncate_prompt_tokens": self.max_length},
                     headers={"Content-Type": "application/json"},
-                    timeout=300,  # 5 minute timeout
+                    timeout=self.request_timeout,
                 )
                 response.raise_for_status()
                 return [item["embedding"] for item in response.json()["data"]]
@@ -56,9 +58,11 @@ class VLLMEmbeddingClient:
             return False
 
 
-def load_vllm_client(vllm_api_url: str = "http://localhost:8000", max_length: int = 256):
+def load_vllm_client(
+    vllm_api_url: str = "http://localhost:8000", max_length: int = 256, request_timeout: int = 300
+):
     """Load vLLM HTTP API client"""
-    client = VLLMEmbeddingClient(base_url=vllm_api_url, max_length=max_length)
+    client = VLLMEmbeddingClient(base_url=vllm_api_url, max_length=max_length, request_timeout=request_timeout)
 
     if not client.check_server_status():
         print(f"Warning: Unable to connect to vLLM server {vllm_api_url}")
@@ -97,6 +101,8 @@ class Index_Builder:
         vllm_api_url="http://localhost:8000",
         max_length=256,
         chunk_save_interval=10000,  # Force disk flush after processing this many batches
+        api_parallelism=1,
+        request_timeout=300,
     ):
 
         self.retrieval_method = retrieval_method.lower()
@@ -109,8 +115,12 @@ class Index_Builder:
         self.faiss_gpu = faiss_gpu
         self.vllm_api_url = vllm_api_url
         self.max_length = max_length
-        self.chunk_save_interval = chunk_save_interval
-        self.encoder = load_vllm_client(self.vllm_api_url, max_length=self.max_length)
+        self.chunk_save_interval = max(1, chunk_save_interval)
+        self.api_parallelism = max(1, api_parallelism)
+        self.request_timeout = request_timeout
+        self.encoder = load_vllm_client(
+            self.vllm_api_url, max_length=self.max_length, request_timeout=self.request_timeout
+        )
         # prepare save dir
         print(self.save_dir)
         if not os.path.exists(self.save_dir):
@@ -196,6 +206,35 @@ class Index_Builder:
         else:
             memmap[:] = all_embeddings
 
+    def _get_batch_contents(self, start_idx, end_idx):
+        if hasattr(self.corpus, "__getitem__"):
+            batch_data = self.corpus[start_idx:end_idx]["contents"]
+        else:
+            batch_items = []
+            for i, item in enumerate(self.corpus):
+                if start_idx <= i < end_idx:
+                    batch_items.append(item)
+                elif i >= end_idx:
+                    break
+            batch_data = [item["contents"] for item in batch_items]
+
+        if self.retrieval_method == "e5":
+            batch_data = [f"passage: {doc}" for doc in batch_data]
+
+        return batch_data
+
+    def _normalize_embeddings(self, embeddings):
+        if "dpr" not in self.retrieval_method:
+            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+            embeddings = embeddings / (norms + 1e-12)
+        return embeddings
+
+    def _encode_batch(self, batch_idx, start_idx, end_idx, batch_data):
+        batch_embeddings_list = self.encoder.get_embeddings(batch_data)
+        batch_embeddings = np.array(batch_embeddings_list, dtype=np.float32)
+        batch_embeddings = self._normalize_embeddings(batch_embeddings)
+        return batch_idx, start_idx, end_idx, batch_embeddings
+
     def encode_all_vllm_api(self):
         """Batch encoding using vLLM HTTP API (chunked save version)
 
@@ -203,32 +242,18 @@ class Index_Builder:
         """
         print(f"Starting document encoding using vLLM API ({self.vllm_api_url})...")
         print("Using chunked save mechanism to avoid memory explosion...")
+        print(f"API parallelism: {self.api_parallelism}")
 
         # Calculate total batches and embedding dimensions
         corpus_size = len(self.corpus) if hasattr(self.corpus, "__len__") else sum(1 for _ in self.corpus)
         total_batches = (corpus_size + self.batch_size - 1) // self.batch_size
 
         # Get first batch embedding to determine dimensions
-        if hasattr(self.corpus, "__getitem__"):
-            first_batch_data = self.corpus[0 : self.batch_size]["contents"]
-        else:
-            # If IterableDataset, special handling needed
-            first_batch_items = []
-            for i, item in enumerate(self.corpus):
-                if i >= self.batch_size:
-                    break
-                first_batch_items.append(item)
-            first_batch_data = [item["contents"] for item in first_batch_items]
-        if self.retrieval_method == "e5":
-            first_batch_data = [f"passage: {doc}" for doc in first_batch_data]
+        first_batch_data = self._get_batch_contents(0, min(self.batch_size, corpus_size))
 
         first_batch_embeddings = self.encoder.get_embeddings(first_batch_data)
         first_batch_embeddings = np.array(first_batch_embeddings, dtype=np.float32)
-
-        # Normalize first batch
-        if "dpr" not in self.retrieval_method:
-            norms = np.linalg.norm(first_batch_embeddings, axis=1, keepdims=True)
-            first_batch_embeddings = first_batch_embeddings / (norms + 1e-12)
+        first_batch_embeddings = self._normalize_embeddings(first_batch_embeddings)
 
         hidden_size = first_batch_embeddings.shape[1]
 
@@ -244,49 +269,39 @@ class Index_Builder:
         print(f"Starting chunked processing...")
 
         try:
-            # Process remaining batches
-            for batch_idx in tqdm(range(1, total_batches), desc="vLLM API Embedding:"):
-                start_idx = batch_idx * self.batch_size
-                end_idx = min(start_idx + self.batch_size, corpus_size)
+            if total_batches > 1:
+                next_batch_idx = 1
+                futures = {}
 
-                if hasattr(self.corpus, "__getitem__"):
-                    batch_data = self.corpus[start_idx:end_idx]["contents"]
-                else:
-                    # If IterableDataset, special handling needed
-                    batch_items = []
-                    for i, item in enumerate(self.corpus):
-                        if i >= start_idx and i < end_idx:
-                            batch_items.append(item)
-                        elif i >= end_idx:
-                            break
-                    batch_data = [item["contents"] for item in batch_items]
+                def submit_next_batch(executor):
+                    nonlocal next_batch_idx
+                    if next_batch_idx >= total_batches:
+                        return
+                    start_idx = next_batch_idx * self.batch_size
+                    end_idx = min(start_idx + self.batch_size, corpus_size)
+                    batch_data = self._get_batch_contents(start_idx, end_idx)
+                    future = executor.submit(self._encode_batch, next_batch_idx, start_idx, end_idx, batch_data)
+                    futures[future] = next_batch_idx
+                    next_batch_idx += 1
 
-                # Add prefix based on retrieval method
-                if self.retrieval_method == "e5":
-                    batch_data = [f"passage: {doc}" for doc in batch_data]
+                with ThreadPoolExecutor(max_workers=self.api_parallelism) as executor:
+                    for _ in range(min(self.api_parallelism, total_batches - 1)):
+                        submit_next_batch(executor)
 
-                # Get embeddings using vLLM HTTP API
-                batch_embeddings_list = self.encoder.get_embeddings(batch_data)
+                    with tqdm(total=total_batches - 1, desc="vLLM API Embedding:") as pbar:
+                        while futures:
+                            completed_future = next(as_completed(futures))
+                            futures.pop(completed_future)
+                            batch_idx, start_idx, end_idx, batch_embeddings = completed_future.result()
+                            memmap[start_idx:end_idx] = batch_embeddings
 
-                # Convert to numpy array
-                batch_embeddings = np.array(batch_embeddings_list, dtype=np.float32)
+                            if batch_idx % self.chunk_save_interval == 0:
+                                memmap.flush()
+                                print(f"Processed {batch_idx}/{total_batches} batches, flushed to disk")
 
-                # Normalize (except for DPR models)
-                if "dpr" not in self.retrieval_method:
-                    # Calculate L2 norm and normalize
-                    norms = np.linalg.norm(batch_embeddings, axis=1, keepdims=True)
-                    batch_embeddings = batch_embeddings / (norms + 1e-12)  # Avoid division by zero
-
-                # Save directly to memmap file
-                memmap[start_idx:end_idx] = batch_embeddings
-
-                # Periodically force flush to disk
-                if batch_idx % self.chunk_save_interval == 0:
-                    memmap.flush()
-                    print(f"Processed {batch_idx}/{total_batches} batches, flushed to disk")
-
-                # Clean up memory
-                del batch_embeddings, batch_embeddings_list
+                            del batch_embeddings
+                            pbar.update(1)
+                            submit_next_batch(executor)
 
         except Exception as e:
             print(f"vLLM API call failed: {e}")
@@ -372,6 +387,8 @@ def main():
     # vLLM API parameters
     parser.add_argument("--vllm_api_url", type=str, default="http://localhost:8000", help="vLLM API service address")
     parser.add_argument("--max_length", type=int, default=256, help="Maximum text length")
+    parser.add_argument("--api_parallelism", type=int, default=1, help="Number of concurrent vLLM API requests")
+    parser.add_argument("--request_timeout", type=int, default=300, help="HTTP request timeout in seconds")
     parser.add_argument(
         "--chunk_save_interval", type=int, default=10000, help="Force disk flush after processing this many batches"
     )
@@ -386,6 +403,8 @@ def main():
     print(f"vLLM API: {args.vllm_api_url}")
     print(f"FAISS type: {args.faiss_type}")
     print(f"Max length: {args.max_length}")
+    print(f"API parallelism: {args.api_parallelism}")
+    print(f"Request timeout: {args.request_timeout}")
     print(f"Chunk save interval: {args.chunk_save_interval}")
     print()
 
@@ -401,6 +420,8 @@ def main():
         vllm_api_url=args.vllm_api_url,
         max_length=args.max_length,
         chunk_save_interval=args.chunk_save_interval,
+        api_parallelism=args.api_parallelism,
+        request_timeout=args.request_timeout,
     )
     index_builder.build_index()
 
