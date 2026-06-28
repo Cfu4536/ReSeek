@@ -96,6 +96,7 @@ class Index_Builder:
         batch_size,
         faiss_type=None,
         embedding_path=None,
+        embedding_save_path=None,
         save_embedding=False,
         faiss_gpu=False,
         vllm_api_url="http://localhost:8000",
@@ -118,9 +119,7 @@ class Index_Builder:
         self.chunk_save_interval = max(1, chunk_save_interval)
         self.api_parallelism = max(1, api_parallelism)
         self.request_timeout = request_timeout
-        self.encoder = load_vllm_client(
-            self.vllm_api_url, max_length=self.max_length, request_timeout=self.request_timeout
-        )
+        self.encoder = None
         # prepare save dir
         print(self.save_dir)
         if not os.path.exists(self.save_dir):
@@ -131,7 +130,12 @@ class Index_Builder:
 
         self.index_save_path = os.path.join(self.save_dir, f"{self.retrieval_method}_{self.faiss_type}.index")
 
-        self.embedding_save_path = os.path.join(self.save_dir, f"emb_{self.retrieval_method}.memmap")
+        self.embedding_save_path = embedding_save_path or os.path.join(
+            self.save_dir, f"emb_{self.retrieval_method}.memmap"
+        )
+        embedding_save_dir = os.path.dirname(self.embedding_save_path)
+        if embedding_save_dir:
+            os.makedirs(embedding_save_dir, exist_ok=True)
 
         self.corpus = load_corpus(self.corpus_path)
 
@@ -243,6 +247,11 @@ class Index_Builder:
         print(f"Starting document encoding using vLLM API ({self.vllm_api_url})...")
         print("Using chunked save mechanism to avoid memory explosion...")
         print(f"API parallelism: {self.api_parallelism}")
+
+        if self.encoder is None:
+            self.encoder = load_vllm_client(
+                self.vllm_api_url, max_length=self.max_length, request_timeout=self.request_timeout
+            )
 
         # Calculate total batches and embedding dimensions
         corpus_size = len(self.corpus) if hasattr(self.corpus, "__len__") else sum(1 for _ in self.corpus)
@@ -381,6 +390,12 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32, help="API call batch size")
     parser.add_argument("--faiss_type", default="Flat", type=str, help="FAISS index type")
     parser.add_argument("--embedding_path", default=None, type=str, help="Pre-computed embedding file path")
+    parser.add_argument(
+        "--embedding_save_path",
+        default=None,
+        type=str,
+        help="Path used when saving newly generated embeddings",
+    )
     parser.add_argument("--save_embedding", action="store_true", default=False, help="Whether to save embedding")
     parser.add_argument("--faiss_gpu", default=False, action="store_true", help="Whether to use GPU for index building")
 
@@ -415,6 +430,7 @@ def main():
         batch_size=args.batch_size,
         faiss_type=args.faiss_type,
         embedding_path=args.embedding_path,
+        embedding_save_path=args.embedding_save_path,
         save_embedding=args.save_embedding,
         faiss_gpu=args.faiss_gpu,
         vllm_api_url=args.vllm_api_url,

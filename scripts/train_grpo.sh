@@ -5,7 +5,7 @@ WAND_PROJECT='ReSeek'
 #export BASE_MODEL='/opt/data/qwen/Qwen2.5-3B-Instruct'
 export BASE_MODEL='/opt/data/TencentBAC/ReSeek-qwen2.5-3b-em-grpo'
 
-export EXPERIMENT_NAME=ReSeek-nq_hotpotqa_train-qwen2.5-3b-it-em-grpo_max_turn1
+export EXPERIMENT_NAME=ReSeek-nq_hotpotqa_train-qwen2.5-3b-it-em-grpo_max_turn4
 set -x
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
@@ -62,7 +62,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.total_epochs=1 \
     trainer.default_hdfs_dir=null \
     reward_model.reward_manager=naive \
-    max_turns=1 \
+    max_turns=4 \
     retriever.url=" http://0.0.0.0:8100/retrieve" \
     retriever.topk=3 \
     2>&1 | tee logs/$EXPERIMENT_NAME_$TIME_STAMP.log
