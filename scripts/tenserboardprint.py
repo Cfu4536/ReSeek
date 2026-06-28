@@ -4,7 +4,7 @@ from tensorboard.backend.event_processing.event_accumulator import EventAccumula
 tb_dir = Path(
     "/opt/exps/ReSeek/tensorboard_log/"
     "ReSeek/"
-    "ReSeek-nq_hotpotqa_train-qwen2.5-3b-it-em-grpo_max_turn1"
+    "ReSeek-nq_hotpotqa_train-qwen2.5-3b-it-em-grpo_max_turn4"
 )
 
 event_files = list(tb_dir.rglob("events.out.tfevents.*"))

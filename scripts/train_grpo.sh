@@ -1,6 +1,6 @@
+### CUDA_VISIBLE_DEVICES=3 bash scripts/train_grpo.sh
 
 WAND_PROJECT='ReSeek'
-
 
 #export BASE_MODEL='/opt/data/qwen/Qwen2.5-3B-Instruct'
 export BASE_MODEL='/opt/data/TencentBAC/ReSeek-qwen2.5-3b-em-grpo'
@@ -21,7 +21,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.train_files=$TRAIN_DATA_DIR/train.parquet \
     data.val_files=$TEST_DATA_DIR/test.parquet \
     data.train_batch_size=512 \
-    data.val_batch_size=256 \
+    data.val_batch_size=512 \
     data.max_prompt_length=2048 \
     data.max_response_length=500 \
     data.max_start_length=2048 \

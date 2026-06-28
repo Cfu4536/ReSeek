@@ -175,6 +175,16 @@ class DenseRetriever(BaseRetriever):
         super().__init__(config)
         print("***********Building GPU vector database****************")
         self.index = faiss.read_index(self.index_path)
+        if config.nprobe is not None:
+            try:
+                # ParameterSpace also handles wrapped IVF indexes (for example,
+                # IndexPreTransform) where assigning index.nprobe directly does not.
+                faiss.ParameterSpace().set_index_parameter(self.index, "nprobe", config.nprobe)
+                print(f"***********FAISS nprobe set to {config.nprobe}****************")
+            except RuntimeError as exc:
+                raise ValueError(
+                    f"--nprobe={config.nprobe} can only be used with an IVF FAISS index: {exc}"
+                ) from exc
         print("***********GPU vector database built****************")
         if config.faiss_gpu:
             co = faiss.GpuMultipleClonerOptions()
@@ -272,6 +282,7 @@ class Config:
         retrieval_query_max_length: int = 256,
         retrieval_use_fp16: bool = False,
         retrieval_batch_size: int = 128,
+        nprobe: Optional[int] = None,
     ):
         self.retrieval_method = retrieval_method
         self.retrieval_topk = retrieval_topk
@@ -285,6 +296,7 @@ class Config:
         self.retrieval_query_max_length = retrieval_query_max_length
         self.retrieval_use_fp16 = retrieval_use_fp16
         self.retrieval_batch_size = retrieval_batch_size
+        self.nprobe = nprobe
 
 
 class QueryRequest(BaseModel):
@@ -348,8 +360,16 @@ if __name__ == "__main__":
         "--retriever_model", type=str, default="intfloat/e5-base-v2", help="Path of the retriever model."
     )
     parser.add_argument("--faiss_gpu", action="store_true", help="Use GPU for computation")
+    parser.add_argument(
+        "--nprobe",
+        type=int,
+        default=None,
+        help="Number of IVF inverted lists to search. Higher values improve recall but increase latency.",
+    )
 
     args = parser.parse_args()
+    if args.nprobe is not None and args.nprobe < 1:
+        parser.error("--nprobe must be a positive integer")
 
     config = Config(
         retrieval_method=args.retriever_name,
@@ -362,6 +382,7 @@ if __name__ == "__main__":
         retrieval_query_max_length=256,
         retrieval_use_fp16=True,
         retrieval_batch_size=512,
+        nprobe=args.nprobe,
     )
 
     retriever = get_retriever(config)
