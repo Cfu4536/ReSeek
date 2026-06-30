@@ -8,12 +8,15 @@ order of non-empty JSONL records, which is also the order used by
 """
 
 import argparse
+import contextlib
+import io
 import json
 import logging
 import os
 import random
 import shutil
 import sys
+import tarfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -21,6 +24,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import numpy as np
+from tqdm.auto import tqdm
 
 
 LOG = logging.getLogger("index_builder")
@@ -156,9 +160,64 @@ def record_to_text(record: Dict[str, Any], text_field: Optional[str]) -> str:
     return value
 
 
-def iter_corpus(path: Path, start_record: int = 0) -> Iterable[Tuple[int, str, Dict[str, Any]]]:
+@contextlib.contextmanager
+def open_corpus_text(path: Path, archive_member: Optional[str] = None) -> Iterable[Any]:
+    """Open a plain JSONL file or a JSONL member inside a tar archive.
+
+    Some ReSeek corpus downloads retain a ``.jsonl`` filename even though the
+    payload is a POSIX tar archive.  Detection therefore uses file contents,
+    not the suffix.  The member is streamed directly and is never extracted.
+    """
+    if not tarfile.is_tarfile(str(path)):
+        with path.open("r", encoding="utf-8") as f:
+            yield f
+        return
+
+    with tarfile.open(str(path), mode="r:*") as archive:
+        regular_members = [member for member in archive.getmembers() if member.isfile()]
+        if archive_member:
+            matches = [
+                member
+                for member in regular_members
+                if member.name == archive_member or Path(member.name).name == archive_member
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    "Tar archive member %r matched %d files in %s"
+                    % (archive_member, len(matches), path)
+                )
+            member = matches[0]
+        else:
+            json_members = [
+                member
+                for member in regular_members
+                if member.name.lower().endswith((".jsonl", ".json", ".ndjson"))
+            ]
+            candidates = json_members or regular_members
+            if len(candidates) != 1:
+                names = [member.name for member in candidates[:20]]
+                raise RuntimeError(
+                    "Tar archive %s contains %d candidate data files: %s. "
+                    "Select one with --archive-member."
+                    % (path, len(candidates), names)
+                )
+            member = candidates[0]
+        raw = archive.extractfile(member)
+        if raw is None:
+            raise RuntimeError("Could not open %s from tar archive %s" % (member.name, path))
+        LOG.info("Streaming corpus member %s from tar archive %s", member.name, path)
+        with raw:
+            with io.TextIOWrapper(raw, encoding="utf-8") as text:
+                yield text
+
+
+def iter_corpus(
+    path: Path,
+    start_record: int = 0,
+    archive_member: Optional[str] = None,
+) -> Iterable[Tuple[int, int, Dict[str, Any]]]:
     record_id = 0
-    with path.open("r", encoding="utf-8") as f:
+    with open_corpus_text(path, archive_member) as f:
         for line_number, line in enumerate(f, 1):
             if not line.strip():
                 continue
@@ -193,9 +252,11 @@ def initial_manifest(args: argparse.Namespace) -> Dict[str, Any]:
         "corpus_mtime_ns": stat.st_mtime_ns,
         "retrieval_method": args.retrieval_method,
         "text_field": args.text_field,
+        "archive_member": args.archive_member,
         "prefix": args.passage_prefix,
         "storage_dtype": args.embedding_dtype,
         "dimension": None,
+        "total_records": None,
         "record_count": 0,
         "embedding_complete": False,
         "chunks": [],
@@ -209,7 +270,16 @@ def load_or_create_manifest(args: argparse.Namespace, manifest_path: Path) -> Di
         return expected
     with manifest_path.open("r", encoding="utf-8") as f:
         manifest = json.load(f)
-    keys = ("version", "corpus_path", "corpus_size", "corpus_mtime_ns", "text_field", "prefix", "storage_dtype")
+    keys = (
+        "version",
+        "corpus_path",
+        "corpus_size",
+        "corpus_mtime_ns",
+        "text_field",
+        "archive_member",
+        "prefix",
+        "storage_dtype",
+    )
     mismatches = [key for key in keys if manifest.get(key) != expected.get(key)]
     if mismatches:
         raise RuntimeError(
@@ -243,10 +313,32 @@ def embed_corpus(args: argparse.Namespace, manifest: Dict[str, Any], manifest_pa
         return
     client = EmbeddingClient(args.api_url, args.api_model, args.request_timeout, args.retries, args.max_length)
     start_id = int(manifest.get("record_count", 0))
+    total_records = manifest.get("total_records")
+    if total_records is None:
+        LOG.info("Counting corpus records once so progress and ETA can be displayed ...")
+        with open_corpus_text(args.corpus_path, args.archive_member) as corpus_stream:
+            total_records = sum(1 for line in corpus_stream if line.strip())
+        manifest["total_records"] = int(total_records)
+        atomic_json_dump(manifest, manifest_path)
+        LOG.info("Corpus contains %d non-empty records", total_records)
+    total_records = int(total_records)
+    if start_id > total_records:
+        raise RuntimeError(
+            "Embedding manifest has %d completed records, but corpus now has only %d"
+            % (start_id, total_records)
+        )
     texts: List[str] = []
     vectors: List[np.ndarray] = []
     chunk_start = start_id
     started = time.time()
+    progress = tqdm(
+        total=total_records,
+        initial=start_id,
+        desc="Embedding corpus",
+        unit="doc",
+        dynamic_ncols=True,
+        disable=args.no_progress,
+    )
 
     def flush_chunk() -> None:
         nonlocal chunk_start, texts, vectors
@@ -274,7 +366,7 @@ def embed_corpus(args: argparse.Namespace, manifest: Dict[str, Any], manifest_pa
         texts = []
         vectors = []
 
-    for record_id, line_number, record in iter_corpus(args.corpus_path, start_id):
+    for record_id, line_number, record in iter_corpus(args.corpus_path, start_id, args.archive_member):
         try:
             text = record_to_text(record, args.text_field)
         except Exception as exc:
@@ -291,6 +383,7 @@ def embed_corpus(args: argparse.Namespace, manifest: Dict[str, Any], manifest_pa
             elif int(manifest["dimension"]) != batch_vectors.shape[1]:
                 raise RuntimeError("Embedding dimension changed during the run")
             vectors.append(batch_vectors)
+            progress.update(batch_vectors.shape[0])
             texts = []
             if sum(item.shape[0] for item in vectors) >= args.chunk_size:
                 flush_chunk()
@@ -306,7 +399,14 @@ def embed_corpus(args: argparse.Namespace, manifest: Dict[str, Any], manifest_pa
         elif int(manifest["dimension"]) != batch_vectors.shape[1]:
             raise RuntimeError("Embedding dimension changed during the run")
         vectors.append(batch_vectors)
+        progress.update(batch_vectors.shape[0])
     flush_chunk()
+    progress.close()
+    if int(manifest["record_count"]) != total_records:
+        raise RuntimeError(
+            "Embedded %d records, but the corpus count pass found %d"
+            % (manifest["record_count"], total_records)
+        )
     manifest["embedding_complete"] = True
     atomic_json_dump(manifest, manifest_path)
     LOG.info("Embedding phase complete: %d documents", manifest["record_count"])
@@ -374,12 +474,20 @@ def build_faiss(args: argparse.Namespace, manifest: Dict[str, Any], chunks_dir: 
     if not index.is_trained:
         raise RuntimeError("FAISS index did not become trained")
 
-    for chunk_no, chunk in enumerate(manifest["chunks"], 1):
+    chunk_progress = tqdm(
+        manifest["chunks"],
+        desc="Adding vectors to FAISS",
+        unit="chunk",
+        dynamic_ncols=True,
+        disable=args.no_progress,
+    )
+    for chunk_no, chunk in enumerate(chunk_progress, 1):
         array = np.load(str(chunks_dir / chunk["file"]), mmap_mode="r", allow_pickle=False)
         for offset in range(0, array.shape[0], args.faiss_add_batch_size):
             batch = np.ascontiguousarray(array[offset : offset + args.faiss_add_batch_size], dtype=np.float32)
             index.add(batch)
         LOG.info("Added chunk %d/%d; ntotal=%d", chunk_no, len(manifest["chunks"]), index.ntotal)
+        chunk_progress.set_postfix(ntotal=int(index.ntotal))
 
     if int(index.ntotal) != int(manifest["record_count"]):
         raise RuntimeError("FAISS ntotal=%d but corpus has %d records" % (index.ntotal, manifest["record_count"]))
@@ -421,6 +529,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--work-dir", type=Path, default=None, help="Resumable embedding chunk directory")
     parser.add_argument("--retrieval-method", default="e5")
     parser.add_argument("--text-field", default=None)
+    parser.add_argument(
+        "--archive-member",
+        default=None,
+        help="JSONL member name when --corpus-path is a tar containing multiple data files",
+    )
     parser.add_argument("--passage-prefix", default=None)
     parser.add_argument("--api-url", default="http://127.0.0.1:8000")
     parser.add_argument("--api-model", default=None, help="Defaults to the first model returned by /v1/models")
@@ -438,6 +551,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--embedding-only", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--delete-embeddings", action="store_true", help="Delete chunks only after a successful build")
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars")
     parser.add_argument("--log-level", choices=("DEBUG", "INFO", "WARNING", "ERROR"), default="INFO")
     args = parser.parse_args(argv)
     if not args.corpus_path.is_file():

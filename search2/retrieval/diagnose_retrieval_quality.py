@@ -18,9 +18,9 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 import numpy as np
 
 try:
-    from .index_builder_api import EmbeddingClient, record_to_text
+    from .index_builder_api import EmbeddingClient, open_corpus_text, record_to_text
 except ImportError:  # direct execution: python retrieval/diagnose_retrieval_quality.py
-    from index_builder_api import EmbeddingClient, record_to_text
+    from index_builder_api import EmbeddingClient, open_corpus_text, record_to_text
 
 
 LOG = logging.getLogger("diagnose_retrieval")
@@ -33,11 +33,15 @@ def positive_int(value: str) -> int:
     return number
 
 
-def selected_records(corpus_path: Path, target_ids: Set[int]) -> Tuple[Dict[int, Dict[str, Any]], int]:
+def selected_records(
+    corpus_path: Path,
+    target_ids: Set[int],
+    archive_member: Optional[str] = None,
+) -> Tuple[Dict[int, Dict[str, Any]], int]:
     """Read selected non-empty JSONL records and count all corpus records."""
     selected: Dict[int, Dict[str, Any]] = {}
     record_id = 0
-    with corpus_path.open("r", encoding="utf-8") as f:
+    with open_corpus_text(corpus_path, archive_member) as f:
         for line_number, line in enumerate(f, 1):
             if not line.strip():
                 continue
@@ -177,6 +181,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--api-model", default=None)
     parser.add_argument("--retrieval-method", default="e5")
     parser.add_argument("--text-field", default=None)
+    parser.add_argument(
+        "--archive-member",
+        default=None,
+        help="JSONL member name when --corpus-path is a tar containing multiple data files",
+    )
     parser.add_argument("--query-prefix", default=None)
     parser.add_argument("--sample-size", type=positive_int, default=100)
     parser.add_argument("--query-max-chars", type=positive_int, default=300)
@@ -254,13 +263,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         invalid = sorted({doc_id for ids in relevant_ids for doc_id in ids if doc_id < 0 or doc_id >= index.ntotal})
         if invalid:
             raise ValueError("Probe relevant ids are outside index range: %s" % invalid[:10])
-        _, corpus_count = selected_records(args.corpus_path, set())
+        _, corpus_count = selected_records(args.corpus_path, set(), args.archive_member)
         test_kind = "labelled"
     else:
         sample_size = min(args.sample_size, int(index.ntotal))
         rng = np.random.default_rng(args.seed)
         sample_ids = sorted(int(value) for value in rng.choice(int(index.ntotal), size=sample_size, replace=False))
-        records, corpus_count = selected_records(args.corpus_path, set(sample_ids))
+        records, corpus_count = selected_records(args.corpus_path, set(sample_ids), args.archive_member)
         queries = [make_self_query(records[doc_id], args.text_field, args.query_max_chars) for doc_id in sample_ids]
         relevant_ids = [{doc_id} for doc_id in sample_ids]
         test_kind = "self_retrieval"

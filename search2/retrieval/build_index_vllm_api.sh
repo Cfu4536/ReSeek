@@ -15,6 +15,7 @@ CHUNK_SIZE="${CHUNK_SIZE:-100000}"
 TRAIN_SIZE="${TRAIN_SIZE:-262144}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300}"
 API_MODEL="${API_MODEL:-}"
+ARCHIVE_MEMBER="${ARCHIVE_MEMBER:-}"
 EMBEDDING_DTYPE="${EMBEDDING_DTYPE:-float16}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +38,9 @@ args=(
 
 if [[ -n "${API_MODEL}" ]]; then
   args+=(--api-model "${API_MODEL}")
+fi
+if [[ -n "${ARCHIVE_MEMBER}" ]]; then
+  args+=(--archive-member "${ARCHIVE_MEMBER}")
 fi
 
 # EXTRA_ARGS can be used for operational switches such as:
