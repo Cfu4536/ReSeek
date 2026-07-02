@@ -1,5 +1,6 @@
 ### CUDA_VISIBLE_DEVICES=3 bash scripts/train_grpo.sh
-
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=2
 WAND_PROJECT='ReSeek'
 
 #export BASE_MODEL='/opt/data/qwen/Qwen2.5-3B-Instruct'
